@@ -1,0 +1,14 @@
+[package]
+name = "tui-edit"
+version = "0.1.0"
+edition = "2021"
+description = "A built-in TUI text editor for CLI tools — no vim required"
+license = "MIT"
+repository = "https://github.com/schacon/tui-edit"
+keywords = ["editor", "tui", "terminal", "cli"]
+categories = ["command-line-interface", "text-editors"]
+
+[dependencies]
+anyhow = "1"
+crossterm = "0.29"
+ratatui = "0.30"
