@@ -1,16 +1,16 @@
-//! A built-in TUI text editor for CLI tools.
+//! Scott's Own Editor — a built-in TUI text editor for CLI tools.
 //!
 //! Drop-in fallback editor when no external editor (`$EDITOR`, `$VISUAL`,
 //! `core.editor`) is configured. Also usable as a standalone file editor.
 //!
 //! ```no_run
-//! use tui_edit::{edit, EditorMode};
+//! use soe::{edit, EditorMode};
 //!
 //! // Open with initial content, returns Some(content) on save, None on cancel
 //! let result = edit("commit message", "fix: resolve panic on empty input", EditorMode::CommitMessage)?;
 //!
 //! // Edit a file on disk
-//! tui_edit::edit_file(std::path::Path::new("README.md"))?;
+//! soe::edit_file(std::path::Path::new("README.md"))?;
 //! # Ok::<(), anyhow::Error>(())
 //! ```
 

@@ -1,10 +1,10 @@
 [package]
-name = "tui-edit"
+name = "soe"
 version = "0.1.0"
 edition = "2021"
-description = "A built-in TUI text editor for CLI tools — no vim required"
+description = "Scott's Own Editor — a built-in TUI text editor for CLI tools, no vim required"
 license = "MIT"
-repository = "https://github.com/schacon/tui-edit"
+repository = "https://github.com/schacon/soe"
 keywords = ["editor", "tui", "terminal", "cli"]
 categories = ["command-line-interface", "text-editors"]
 
