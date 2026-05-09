@@ -159,6 +159,11 @@ struct AboutOverlay {
     active: bool,
 }
 
+#[derive(Default)]
+struct TeddyOverlay {
+    active: bool,
+}
+
 // ── Editor state ────────────────────────────────────────────────────────────
 
 struct EditorApp {
@@ -175,6 +180,8 @@ struct EditorApp {
     menu_item_index: usize,
     help_overlay: HelpOverlay,
     about_overlay: AboutOverlay,
+    teddy_overlay: TeddyOverlay,
+    secret_buf: String,
     editor_area: Rect,
     gutter_width: u16,
     highlight_save_hint: bool,
@@ -207,6 +214,8 @@ impl EditorApp {
             menu_item_index: 0,
             help_overlay: HelpOverlay::default(),
             about_overlay: AboutOverlay::default(),
+            teddy_overlay: TeddyOverlay::default(),
+            secret_buf: String::new(),
             editor_area: Rect::default(),
             gutter_width: 4,
             highlight_save_hint: false,
@@ -247,6 +256,13 @@ impl EditorApp {
         } else if self.cursor_col >= self.scroll_col + visible_cols {
             self.scroll_col = self.cursor_col - visible_cols + 1;
         }
+    }
+
+    fn remove_secret_text(&mut self, len: usize) {
+        let line = &mut self.lines[self.cursor_row];
+        let start = self.cursor_col.saturating_sub(len);
+        line.drain(start..self.cursor_col);
+        self.cursor_col = start;
     }
 
     fn insert_char(&mut self, ch: char) {
@@ -344,6 +360,15 @@ impl EditorApp {
             return;
         }
 
+        if self.teddy_overlay.active {
+            if let Event::Key(key) = ev {
+                if key.kind == KeyEventKind::Press {
+                    self.teddy_overlay.active = false;
+                }
+            }
+            return;
+        }
+
         if self.active_menu.is_some() {
             self.handle_menu_event(ev);
             return;
@@ -426,10 +451,34 @@ impl EditorApp {
                         self.clamp_cursor();
                     }
                     KeyCode::Char(ch) => {
+                        // Track secret :teddy sequence
+                        if ch == ':' && self.secret_buf.is_empty() {
+                            self.secret_buf.push(':');
+                        } else if !self.secret_buf.is_empty() {
+                            self.secret_buf.push(ch);
+                            if !":teddy".starts_with(&self.secret_buf) {
+                                self.secret_buf.clear();
+                            }
+                        }
                         self.insert_char(ch);
                     }
-                    KeyCode::Enter => self.insert_newline(),
-                    KeyCode::Backspace => self.backspace(),
+                    KeyCode::Enter => {
+                        if self.secret_buf == ":teddy" {
+                            self.teddy_overlay.active = true;
+                            self.remove_secret_text(6);
+                        } else if self.secret_buf == ":q" {
+                            self.remove_secret_text(2);
+                            self.save_on_quit = false;
+                            self.should_quit = true;
+                        } else {
+                            self.insert_newline();
+                        }
+                        self.secret_buf.clear();
+                    }
+                    KeyCode::Backspace => {
+                        self.secret_buf.clear();
+                        self.backspace();
+                    }
                     KeyCode::Delete => self.delete(),
                     KeyCode::Tab => {
                         self.lines[self.cursor_row].insert_str(self.cursor_col, "    ");
@@ -655,6 +704,10 @@ fn render(frame: &mut ratatui::Frame, app: &mut EditorApp) {
 
     if app.about_overlay.active {
         render_about_overlay(frame);
+    }
+
+    if app.teddy_overlay.active {
+        render_teddy_overlay(frame);
     }
 }
 
@@ -959,39 +1012,62 @@ fn render_help_overlay(frame: &mut ratatui::Frame) {
 
 fn render_about_overlay(frame: &mut ratatui::Frame) {
     let screen = frame.area();
-    let width = 40u16.min(screen.width.saturating_sub(4));
-    let height = 7u16.min(screen.height.saturating_sub(4));
+    let width = 52u16.min(screen.width.saturating_sub(4));
+    let height = 15u16.min(screen.height.saturating_sub(4));
     let x = (screen.width.saturating_sub(width)) / 2;
     let y = (screen.height.saturating_sub(height)) / 2;
     let rect = Rect::new(x, y, width, height);
 
     frame.render_widget(Clear, rect);
 
+    let title_style = Style::default()
+        .fg(Color::Rgb(120, 200, 120))
+        .add_modifier(Modifier::BOLD);
+    let info_style = Style::default().fg(Color::Rgb(120, 200, 120));
+    let charity_style = Style::default()
+        .fg(Color::Rgb(200, 200, 100))
+        .add_modifier(Modifier::BOLD);
+    let hint_style = Style::default().fg(Color::Rgb(120, 200, 120));
+    let dim_style = Style::default().fg(Color::DarkGray);
+
     let about_text = vec![
         Line::raw(""),
-        Line::styled(
-            "  tui-edit",
-            Style::default()
-                .fg(DROPDOWN_FG)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Line::styled(
-            "  from GitButler",
-            Style::default()
-                .fg(DROPDOWN_FG)
-                .add_modifier(Modifier::BOLD),
-        ),
+        Line::from(vec![Span::styled("SOE - Scott's Own Editor", title_style)])
+            .alignment(ratatui::layout::Alignment::Center),
         Line::raw(""),
-        Line::styled(
-            "  Press any key to close",
-            Style::default().fg(Color::DarkGray),
-        ),
+        Line::from(vec![Span::styled("by Scott Chacon et al.", info_style)])
+            .alignment(ratatui::layout::Alignment::Center),
+        Line::from(vec![Span::styled(
+            "SOE is open source and freely distributable",
+            info_style,
+        )])
+        .alignment(ratatui::layout::Alignment::Center),
+        Line::raw(""),
+        Line::from(vec![Span::styled(
+            "Help poor doggies in Germany!",
+            charity_style,
+        )])
+        .alignment(ratatui::layout::Alignment::Center),
+        Line::from(vec![Span::styled(
+            "type :teddy for more information",
+            hint_style,
+        )])
+        .alignment(ratatui::layout::Alignment::Center),
+        Line::raw(""),
+        Line::raw(""),
+        Line::from(vec![Span::styled(
+            "type :q<Enter>               to exit",
+            hint_style,
+        )])
+        .alignment(ratatui::layout::Alignment::Center),
+        Line::raw(""),
+        Line::from(vec![Span::styled("Press any key to close", dim_style)])
+            .alignment(ratatui::layout::Alignment::Center),
     ];
 
     let about = Paragraph::new(about_text).block(
         Block::default()
             .borders(Borders::ALL)
-            .title(" About ")
             .border_style(
                 Style::default()
                     .fg(Color::Rgb(140, 140, 180))
@@ -1000,6 +1076,75 @@ fn render_about_overlay(frame: &mut ratatui::Frame) {
             .style(Style::default().bg(DROPDOWN_BG)),
     );
     frame.render_widget(about, rect);
+}
+
+fn render_teddy_overlay(frame: &mut ratatui::Frame) {
+    let screen = frame.area();
+    let width = 54u16.min(screen.width.saturating_sub(4));
+    let height = 14u16.min(screen.height.saturating_sub(4));
+    let x = (screen.width.saturating_sub(width)) / 2;
+    let y = (screen.height.saturating_sub(height)) / 2;
+    let rect = Rect::new(x, y, width, height);
+
+    frame.render_widget(Clear, rect);
+
+    let title_style = Style::default()
+        .fg(Color::Rgb(200, 200, 100))
+        .add_modifier(Modifier::BOLD);
+    let text_style = Style::default().fg(Color::Rgb(200, 200, 200));
+    let url_style = Style::default()
+        .fg(Color::Rgb(100, 180, 255))
+        .add_modifier(Modifier::UNDERLINED);
+    let dim_style = Style::default().fg(Color::DarkGray);
+
+    let teddy_text = vec![
+        Line::raw(""),
+        Line::from(vec![Span::styled(
+            "Help poor doggies in Germany!",
+            title_style,
+        )])
+        .alignment(ratatui::layout::Alignment::Center),
+        Line::raw(""),
+        Line::from(vec![Span::styled(
+            "Teddy Farms rescues and rehabilitates",
+            text_style,
+        )])
+        .alignment(ratatui::layout::Alignment::Center),
+        Line::from(vec![Span::styled(
+            "dogs in need across Germany.",
+            text_style,
+        )])
+        .alignment(ratatui::layout::Alignment::Center),
+        Line::raw(""),
+        Line::from(vec![Span::styled(
+            "Learn more and donate at:",
+            text_style,
+        )])
+        .alignment(ratatui::layout::Alignment::Center),
+        Line::raw(""),
+        Line::from(vec![Span::styled(
+            "https://teddyfarms.com",
+            url_style,
+        )])
+        .alignment(ratatui::layout::Alignment::Center),
+        Line::raw(""),
+        Line::raw(""),
+        Line::from(vec![Span::styled("Press any key to close", dim_style)])
+            .alignment(ratatui::layout::Alignment::Center),
+    ];
+
+    let teddy = Paragraph::new(teddy_text).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Teddy Farms ")
+            .border_style(
+                Style::default()
+                    .fg(Color::Rgb(200, 200, 100))
+                    .bg(DROPDOWN_BG),
+            )
+            .style(Style::default().bg(DROPDOWN_BG)),
+    );
+    frame.render_widget(teddy, rect);
 }
 
 // ── Public API ──────────────────────────────────────────────────────────────
