@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "Scott's Own Editor — a built-in TUI text editor for CLI tools, no vim required"
 license = "MIT"
+readme = "README.md"
 repository = "https://github.com/schacon/soe"
 keywords = ["editor", "tui", "terminal", "cli"]
 categories = ["command-line-interface", "text-editors"]
