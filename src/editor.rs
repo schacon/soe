@@ -258,13 +258,6 @@ impl EditorApp {
         }
     }
 
-    fn remove_secret_text(&mut self, len: usize) {
-        let line = &mut self.lines[self.cursor_row];
-        let start = self.cursor_col.saturating_sub(len);
-        line.drain(start..self.cursor_col);
-        self.cursor_col = start;
-    }
-
     fn insert_char(&mut self, ch: char) {
         self.lines[self.cursor_row].insert(self.cursor_col, ch);
         self.cursor_col += ch.len_utf8();
@@ -465,14 +458,8 @@ impl EditorApp {
                     KeyCode::Enter => {
                         if self.secret_buf == ":teddy" {
                             self.teddy_overlay.active = true;
-                            self.remove_secret_text(6);
-                        } else if self.secret_buf == ":q" {
-                            self.remove_secret_text(2);
-                            self.save_on_quit = false;
-                            self.should_quit = true;
-                        } else {
-                            self.insert_newline();
                         }
+                        self.insert_newline();
                         self.secret_buf.clear();
                     }
                     KeyCode::Backspace => {
@@ -1013,7 +1000,7 @@ fn render_help_overlay(frame: &mut ratatui::Frame) {
 fn render_about_overlay(frame: &mut ratatui::Frame) {
     let screen = frame.area();
     let width = 52u16.min(screen.width.saturating_sub(4));
-    let height = 15u16.min(screen.height.saturating_sub(4));
+    let height = 13u16.min(screen.height.saturating_sub(4));
     let x = (screen.width.saturating_sub(width)) / 2;
     let y = (screen.height.saturating_sub(height)) / 2;
     let rect = Rect::new(x, y, width, height);
@@ -1054,12 +1041,6 @@ fn render_about_overlay(frame: &mut ratatui::Frame) {
         )])
         .alignment(ratatui::layout::Alignment::Center),
         Line::raw(""),
-        Line::raw(""),
-        Line::from(vec![Span::styled(
-            "type :q<Enter>               to exit",
-            hint_style,
-        )])
-        .alignment(ratatui::layout::Alignment::Center),
         Line::raw(""),
         Line::from(vec![Span::styled("Press any key to close", dim_style)])
             .alignment(ratatui::layout::Alignment::Center),
