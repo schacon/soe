@@ -1,22 +1,26 @@
 //! Scott's Own Editor — a built-in TUI text editor for CLI tools.
 //!
-//! Drop-in fallback editor when no external editor (`$EDITOR`, `$VISUAL`,
-//! `core.editor`) is configured. Also usable as a standalone file editor.
+//! Provides a single entry point that resolves the best available editor
+//! using Git's precedence (`$GIT_EDITOR` → `core.editor` → `$VISUAL` →
+//! `$EDITOR`) and falls back to a built-in TUI editor when none is configured.
 //!
 //! ```no_run
-//! use soe::{edit, EditorMode};
+//! // One call — handles external editors and built-in fallback automatically
+//! let result = soe::capture("Enter your message (lines starting with # are ignored)")?;
 //!
-//! // Open with initial content, returns Some(content) on save, None on cancel
-//! let result = edit("commit message", "fix: resolve panic on empty input", EditorMode::CommitMessage)?;
+//! // Or with pre-filled content
+//! let result = soe::capture_with_initial("Edit the description", "existing text here")?;
 //!
-//! // Edit a file on disk
-//! soe::edit_file(std::path::Path::new("README.md"))?;
+//! // Direct access to the built-in TUI editor
+//! let result = soe::edit("filename", "initial content", soe::EditorMode::PlainText)?;
 //! # Ok::<(), anyhow::Error>(())
 //! ```
 
+mod capture;
 mod editor;
 mod terminal;
 
+pub use capture::{capture, capture_with_initial};
 pub use editor::EditorMode;
 
 /// Open the built-in TUI editor with initial content.
