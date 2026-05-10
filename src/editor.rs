@@ -102,16 +102,24 @@ enum MenuAction {
     Save,
     SaveAndQuit,
     Cancel,
+    GotoEnd,
+    NextLine,
+    PrevLine,
+    NextParagraph,
+    PrevParagraph,
+    DeleteParagraph,
+    EmptyAll,
     ShowHelp,
     ShowAbout,
 }
 
-const MENU_TITLES: &[&str] = &["File", "Help"];
+const MENU_TITLES: &[&str] = &["File", "Edit", "Help"];
 
 fn menu_items(menu_index: usize) -> &'static [MenuItem] {
     match menu_index {
         0 => &FILE_MENU,
-        1 => &HELP_MENU,
+        1 => &EDIT_MENU,
+        2 => &HELP_MENU,
         _ => &[],
     }
 }
@@ -131,6 +139,44 @@ static FILE_MENU: [MenuItem; 3] = [
         label: "Cancel",
         shortcut: "Esc",
         action: MenuAction::Cancel,
+    },
+];
+
+static EDIT_MENU: [MenuItem; 7] = [
+    MenuItem {
+        label: "Go to End of Line",
+        shortcut: "Ctrl+A",
+        action: MenuAction::GotoEnd,
+    },
+    MenuItem {
+        label: "Next Line",
+        shortcut: "Ctrl+J",
+        action: MenuAction::NextLine,
+    },
+    MenuItem {
+        label: "Prev Line",
+        shortcut: "Ctrl+K",
+        action: MenuAction::PrevLine,
+    },
+    MenuItem {
+        label: "Next Paragraph",
+        shortcut: "Ctrl+L",
+        action: MenuAction::NextParagraph,
+    },
+    MenuItem {
+        label: "Prev Paragraph",
+        shortcut: "Ctrl+H",
+        action: MenuAction::PrevParagraph,
+    },
+    MenuItem {
+        label: "Delete Paragraph",
+        shortcut: "Ctrl+D",
+        action: MenuAction::DeleteParagraph,
+    },
+    MenuItem {
+        label: "Empty (Delete All)",
+        shortcut: "Ctrl+E",
+        action: MenuAction::EmptyAll,
     },
 ];
 
@@ -318,6 +364,36 @@ impl EditorApp {
                 self.save_on_quit = false;
                 self.should_quit = true;
             }
+            MenuAction::GotoEnd => {
+                self.cursor_col = self.lines[self.cursor_row].len();
+            }
+            MenuAction::NextLine => {
+                if self.cursor_row + 1 < self.lines.len() {
+                    self.cursor_row += 1;
+                }
+                self.clamp_cursor();
+            }
+            MenuAction::PrevLine => {
+                if self.cursor_row > 0 {
+                    self.cursor_row -= 1;
+                }
+                self.clamp_cursor();
+            }
+            MenuAction::NextParagraph => {
+                self.move_next_paragraph();
+            }
+            MenuAction::PrevParagraph => {
+                self.move_prev_paragraph();
+            }
+            MenuAction::DeleteParagraph => {
+                self.delete_paragraph();
+            }
+            MenuAction::EmptyAll => {
+                self.lines = vec![String::new()];
+                self.cursor_row = 0;
+                self.cursor_col = 0;
+                self.modified = true;
+            }
             MenuAction::ShowHelp => {
                 self.help_overlay.active = !self.help_overlay.active;
             }
@@ -377,6 +453,27 @@ impl EditorApp {
                     }
                     KeyCode::Char('q') if ctrl => {
                         self.execute_menu_action(MenuAction::SaveAndQuit);
+                    }
+                    KeyCode::Char('a') if ctrl => {
+                        self.execute_menu_action(MenuAction::GotoEnd);
+                    }
+                    KeyCode::Char('j') if ctrl => {
+                        self.execute_menu_action(MenuAction::NextLine);
+                    }
+                    KeyCode::Char('k') if ctrl => {
+                        self.execute_menu_action(MenuAction::PrevLine);
+                    }
+                    KeyCode::Char('l') if ctrl => {
+                        self.execute_menu_action(MenuAction::NextParagraph);
+                    }
+                    KeyCode::Char('h') if ctrl => {
+                        self.execute_menu_action(MenuAction::PrevParagraph);
+                    }
+                    KeyCode::Char('d') if ctrl => {
+                        self.execute_menu_action(MenuAction::DeleteParagraph);
+                    }
+                    KeyCode::Char('e') if ctrl => {
+                        self.execute_menu_action(MenuAction::EmptyAll);
                     }
                     KeyCode::Up => {
                         if self.cursor_row > 0 {
@@ -527,6 +624,80 @@ impl EditorApp {
             col += 1;
         }
         self.cursor_col = col;
+    }
+
+    /// Move cursor to the start of the next paragraph. A paragraph
+    /// boundary is an empty line (or the end of the document).
+    fn move_next_paragraph(&mut self) {
+        let total = self.lines.len();
+        let mut row = self.cursor_row;
+
+        // Skip non-empty lines in the current paragraph.
+        while row < total && !self.lines[row].trim().is_empty() {
+            row += 1;
+        }
+        // Skip any blank lines between paragraphs.
+        while row < total && self.lines[row].trim().is_empty() {
+            row += 1;
+        }
+        self.cursor_row = row.min(total - 1);
+        self.cursor_col = 0;
+        self.clamp_cursor();
+    }
+
+    /// Move cursor to the start of the previous paragraph.
+    fn move_prev_paragraph(&mut self) {
+        let mut row = self.cursor_row;
+
+        // If we're on a blank line, skip blank lines upward first.
+        while row > 0 && self.lines[row].trim().is_empty() {
+            row -= 1;
+        }
+        // Skip non-empty lines upward through the current paragraph.
+        while row > 0 && !self.lines[row - 1].trim().is_empty() {
+            row -= 1;
+        }
+        self.cursor_row = row;
+        self.cursor_col = 0;
+        self.clamp_cursor();
+    }
+
+    /// Delete all lines in the current paragraph (contiguous non-empty
+    /// lines around the cursor). Leaves the cursor on the next content.
+    fn delete_paragraph(&mut self) {
+        // Find the start of this paragraph.
+        let mut start = self.cursor_row;
+        while start > 0 && !self.lines[start - 1].trim().is_empty() {
+            start -= 1;
+        }
+        // Find the end (exclusive).
+        let mut end = self.cursor_row;
+        while end < self.lines.len() && !self.lines[end].trim().is_empty() {
+            end += 1;
+        }
+        // Also consume trailing blank lines.
+        while end < self.lines.len() && self.lines[end].trim().is_empty() {
+            end += 1;
+        }
+
+        if start == end {
+            // Cursor was on a blank line — just delete it.
+            if self.lines.len() > 1 {
+                self.lines.remove(start);
+            } else {
+                self.lines[0].clear();
+            }
+        } else {
+            self.lines.drain(start..end);
+            if self.lines.is_empty() {
+                self.lines.push(String::new());
+            }
+        }
+
+        self.cursor_row = start.min(self.lines.len() - 1);
+        self.cursor_col = 0;
+        self.modified = true;
+        self.clamp_cursor();
     }
 
     fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) {
@@ -948,34 +1119,38 @@ fn render_dropdown(frame: &mut ratatui::Frame, app: &EditorApp, menu_index: usiz
 fn render_help_overlay(frame: &mut ratatui::Frame) {
     let screen = frame.area();
     let width = 50u16.min(screen.width.saturating_sub(4));
-    let height = 12u16.min(screen.height.saturating_sub(4));
+    let height = 22u16.min(screen.height.saturating_sub(4));
     let x = (screen.width.saturating_sub(width)) / 2;
     let y = (screen.height.saturating_sub(height)) / 2;
     let rect = Rect::new(x, y, width, height);
 
     frame.render_widget(Clear, rect);
 
-    let help_text = vec![
+    let shortcut = |s: &'static str| Line::styled(s, Style::default().fg(DROPDOWN_FG));
+    let heading = |s: &'static str| {
         Line::styled(
-            "  Keyboard Shortcuts",
+            s,
             Style::default()
                 .fg(MENU_ACTIVE_BG)
                 .add_modifier(Modifier::BOLD),
-        ),
+        )
+    };
+
+    let help_text = vec![
+        heading("  File"),
+        shortcut("  Ctrl+S        Save"),
+        shortcut("  Ctrl+Q        Save & Quit"),
+        shortcut("  Esc           Highlight save hint"),
+        shortcut("  F10           Open Menu"),
         Line::raw(""),
-        Line::styled(
-            "  Ctrl+Q        Save & Quit",
-            Style::default().fg(DROPDOWN_FG),
-        ),
-        Line::styled("  Ctrl+S        Save", Style::default().fg(DROPDOWN_FG)),
-        Line::styled(
-            "  Esc           Highlight save hint",
-            Style::default().fg(DROPDOWN_FG),
-        ),
-        Line::styled(
-            "  F10           Open Menu",
-            Style::default().fg(DROPDOWN_FG),
-        ),
+        heading("  Edit"),
+        shortcut("  Ctrl+A        Go to end of line"),
+        shortcut("  Ctrl+J        Next line"),
+        shortcut("  Ctrl+K        Prev line"),
+        shortcut("  Ctrl+L        Next paragraph"),
+        shortcut("  Ctrl+H        Prev paragraph"),
+        shortcut("  Ctrl+D        Delete paragraph"),
+        shortcut("  Ctrl+E        Empty (delete all)"),
         Line::raw(""),
         Line::styled(
             "  Press any key to close",
