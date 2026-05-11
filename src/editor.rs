@@ -177,7 +177,7 @@ static EDIT_MENU: [MenuItem; 9] = [
     },
     MenuItem {
         label: "Prev Paragraph",
-        shortcut: "Ctrl+H",
+        shortcut: "Ctrl+P",
         action: MenuAction::PrevParagraph,
     },
     MenuItem {
@@ -548,7 +548,7 @@ impl EditorApp {
                     KeyCode::Char('l') if ctrl => {
                         self.execute_menu_action(MenuAction::NextParagraph);
                     }
-                    KeyCode::Char('h') if ctrl => {
+                    KeyCode::Char('p') if ctrl => {
                         self.execute_menu_action(MenuAction::PrevParagraph);
                     }
                     KeyCode::Char('d') if ctrl => {
@@ -1240,7 +1240,7 @@ fn render_help_overlay(frame: &mut ratatui::Frame) {
         shortcut("  Ctrl+J        Next line"),
         shortcut("  Ctrl+K        Prev line"),
         shortcut("  Ctrl+L        Next paragraph"),
-        shortcut("  Ctrl+H        Prev paragraph"),
+        shortcut("  Ctrl+P        Prev paragraph"),
         shortcut("  Ctrl+D        Delete paragraph"),
         shortcut("  Ctrl+E        Empty (delete all)"),
         Line::raw(""),
