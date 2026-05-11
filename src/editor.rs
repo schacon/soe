@@ -111,6 +111,7 @@ enum MenuAction {
     PrevParagraph,
     DeleteParagraph,
     EmptyAll,
+    ToggleWrap,
     ShowHelp,
     ShowAbout,
 }
@@ -144,7 +145,7 @@ static FILE_MENU: [MenuItem; 3] = [
     },
 ];
 
-static EDIT_MENU: [MenuItem; 9] = [
+static EDIT_MENU: [MenuItem; 10] = [
     MenuItem {
         label: "Undo",
         shortcut: "Ctrl+Z",
@@ -190,6 +191,11 @@ static EDIT_MENU: [MenuItem; 9] = [
         shortcut: "Ctrl+E",
         action: MenuAction::EmptyAll,
     },
+    MenuItem {
+        label: "Toggle Word Wrap",
+        shortcut: "Alt+Z",
+        action: MenuAction::ToggleWrap,
+    },
 ];
 
 static HELP_MENU: [MenuItem; 2] = [
@@ -234,6 +240,58 @@ struct Snapshot {
 
 const MAX_UNDO: usize = 200;
 
+// ── Soft wrap ──────────────────────────────────────────────────────────────
+
+/// One screen row when soft-wrap is active. Maps back to a buffer line and
+/// a byte offset into that line.
+#[derive(Clone)]
+struct VisualRow {
+    line_idx: usize,
+    byte_start: usize,
+    is_continuation: bool,
+}
+
+/// Colour for the wrap continuation indicator in the gutter.
+const WRAP_INDICATOR_FG: Color = Color::Rgb(120, 120, 160);
+
+fn build_visual_rows(lines: &[String], text_width: usize) -> Vec<VisualRow> {
+    let tw = text_width.max(1);
+    let mut rows = Vec::new();
+    for (line_idx, line) in lines.iter().enumerate() {
+        if line.is_empty() {
+            rows.push(VisualRow { line_idx, byte_start: 0, is_continuation: false });
+            continue;
+        }
+        let mut byte_start = 0;
+        let mut col_count = 0;
+        let mut is_first = true;
+        for (byte_pos, _ch) in line.char_indices() {
+            if col_count == tw {
+                rows.push(VisualRow { line_idx, byte_start, is_continuation: !is_first });
+                byte_start = byte_pos;
+                col_count = 0;
+                is_first = false;
+            }
+            col_count += 1;
+        }
+        rows.push(VisualRow { line_idx, byte_start, is_continuation: !is_first });
+    }
+    rows
+}
+
+fn cursor_to_visual_row(visual_rows: &[VisualRow], cursor_row: usize, cursor_col: usize) -> usize {
+    let mut result = 0;
+    for (i, vr) in visual_rows.iter().enumerate() {
+        if vr.line_idx == cursor_row && vr.byte_start <= cursor_col {
+            result = i;
+        }
+        if vr.line_idx > cursor_row {
+            break;
+        }
+    }
+    result
+}
+
 // ── Editor state ────────────────────────────────────────────────────────────
 
 struct EditorApp {
@@ -258,6 +316,9 @@ struct EditorApp {
     hint_highlight_frames: u8,
     undo_stack: Vec<Snapshot>,
     redo_stack: Vec<Snapshot>,
+    word_wrap: bool,
+    scroll_vrow: usize,
+    visual_rows: Vec<VisualRow>,
 }
 
 impl EditorApp {
@@ -294,6 +355,9 @@ impl EditorApp {
             hint_highlight_frames: 0,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            word_wrap: false,
+            scroll_vrow: 0,
+            visual_rows: Vec::new(),
         }
     }
 
@@ -318,17 +382,29 @@ impl EditorApp {
 
     fn ensure_cursor_visible(&mut self) {
         let visible_rows = self.editor_area.height as usize;
-        let visible_cols = (self.editor_area.width.saturating_sub(self.gutter_width)) as usize;
 
-        if self.cursor_row < self.scroll_row {
-            self.scroll_row = self.cursor_row;
-        } else if self.cursor_row >= self.scroll_row + visible_rows {
-            self.scroll_row = self.cursor_row - visible_rows + 1;
-        }
-        if self.cursor_col < self.scroll_col {
-            self.scroll_col = self.cursor_col;
-        } else if self.cursor_col >= self.scroll_col + visible_cols {
-            self.scroll_col = self.cursor_col - visible_cols + 1;
+        if self.word_wrap {
+            if self.visual_rows.is_empty() {
+                return;
+            }
+            let cursor_vr = cursor_to_visual_row(&self.visual_rows, self.cursor_row, self.cursor_col);
+            if cursor_vr < self.scroll_vrow {
+                self.scroll_vrow = cursor_vr;
+            } else if visible_rows > 0 && cursor_vr >= self.scroll_vrow + visible_rows {
+                self.scroll_vrow = cursor_vr - visible_rows + 1;
+            }
+        } else {
+            let visible_cols = (self.editor_area.width.saturating_sub(self.gutter_width)) as usize;
+            if self.cursor_row < self.scroll_row {
+                self.scroll_row = self.cursor_row;
+            } else if visible_rows > 0 && self.cursor_row >= self.scroll_row + visible_rows {
+                self.scroll_row = self.cursor_row - visible_rows + 1;
+            }
+            if self.cursor_col < self.scroll_col {
+                self.scroll_col = self.cursor_col;
+            } else if self.cursor_col >= self.scroll_col + visible_cols {
+                self.scroll_col = self.cursor_col - visible_cols + 1;
+            }
         }
     }
 
@@ -476,6 +552,10 @@ impl EditorApp {
                 self.cursor_col = 0;
                 self.modified = true;
             }
+            MenuAction::ToggleWrap => {
+                self.word_wrap = !self.word_wrap;
+                self.scroll_vrow = 0;
+            }
             MenuAction::ShowHelp => {
                 self.help_overlay.active = !self.help_overlay.active;
             }
@@ -528,8 +608,12 @@ impl EditorApp {
         match ev {
             Event::Key(key) if key.kind == KeyEventKind::Press => {
                 let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+                let alt = key.modifiers.contains(KeyModifiers::ALT);
 
                 match key.code {
+                    KeyCode::Char('z') if alt => {
+                        self.execute_menu_action(MenuAction::ToggleWrap);
+                    }
                     KeyCode::Char('s') if ctrl => {
                         self.execute_menu_action(MenuAction::Save);
                     }
@@ -801,19 +885,45 @@ impl EditorApp {
                     && mouse.row < self.editor_area.y + self.editor_area.height
                     && mouse.column >= self.editor_area.x + self.gutter_width
                 {
-                    let row = (mouse.row as usize - 1) + self.scroll_row;
-                    let col = (mouse.column - self.editor_area.x - self.gutter_width) as usize
-                        + self.scroll_col;
-                    self.cursor_row = row.min(self.lines.len() - 1);
-                    self.cursor_col = col.min(self.lines[self.cursor_row].len());
+                    let click_col = (mouse.column - self.editor_area.x - self.gutter_width) as usize;
+                    if self.word_wrap {
+                        let vr_idx = (mouse.row as usize - 1) + self.scroll_vrow;
+                        if vr_idx < self.visual_rows.len() {
+                            let vr = &self.visual_rows[vr_idx];
+                            self.cursor_row = vr.line_idx;
+                            let line = &self.lines[vr.line_idx];
+                            let mut byte_col = vr.byte_start;
+                            let mut chars_counted = 0;
+                            for ch in line[vr.byte_start..].chars() {
+                                if chars_counted >= click_col { break; }
+                                byte_col += ch.len_utf8();
+                                chars_counted += 1;
+                            }
+                            self.cursor_col = byte_col.min(line.len());
+                        }
+                    } else {
+                        let row = (mouse.row as usize - 1) + self.scroll_row;
+                        let col = click_col + self.scroll_col;
+                        self.cursor_row = row.min(self.lines.len() - 1);
+                        self.cursor_col = col.min(self.lines[self.cursor_row].len());
+                    }
                 }
             }
             MouseEventKind::ScrollUp => {
-                self.scroll_row = self.scroll_row.saturating_sub(3);
+                if self.word_wrap {
+                    self.scroll_vrow = self.scroll_vrow.saturating_sub(3);
+                } else {
+                    self.scroll_row = self.scroll_row.saturating_sub(3);
+                }
             }
             MouseEventKind::ScrollDown => {
-                let max = self.lines.len().saturating_sub(1);
-                self.scroll_row = (self.scroll_row + 3).min(max);
+                if self.word_wrap {
+                    let max = self.visual_rows.len().saturating_sub(1);
+                    self.scroll_vrow = (self.scroll_vrow + 3).min(max);
+                } else {
+                    let max = self.lines.len().saturating_sub(1);
+                    self.scroll_row = (self.scroll_row + 3).min(max);
+                }
             }
             _ => {}
         }
@@ -987,6 +1097,14 @@ fn render_editor(frame: &mut ratatui::Frame, app: &mut EditorApp, area: Rect) {
 
     let visible_rows = area.height as usize;
     let text_width = area.width.saturating_sub(app.gutter_width) as usize;
+
+    if app.word_wrap {
+        app.visual_rows = build_visual_rows(&app.lines, text_width);
+        app.ensure_cursor_visible();
+        render_editor_wrapped(frame, app, area, visible_rows, text_width, digits);
+        return;
+    }
+
     app.ensure_cursor_visible();
 
     let guide_col = if app.mode == EditorMode::CommitMessage {
@@ -1118,6 +1236,127 @@ fn render_editor(frame: &mut ratatui::Frame, app: &mut EditorApp, area: Rect) {
     }
 }
 
+fn render_editor_wrapped(
+    frame: &mut ratatui::Frame,
+    app: &EditorApp,
+    area: Rect,
+    visible_rows: usize,
+    text_width: usize,
+    digits: usize,
+) {
+    let guide_col = if app.mode == EditorMode::CommitMessage {
+        Some(72)
+    } else {
+        None
+    };
+
+    for row_offset in 0..visible_rows {
+        let vr_idx = app.scroll_vrow + row_offset;
+        let y = area.y + row_offset as u16;
+
+        let gutter_area = Rect::new(area.x, y, app.gutter_width, 1);
+        let text_area = Rect::new(area.x + app.gutter_width, y, text_width as u16, 1);
+
+        if vr_idx >= app.visual_rows.len() {
+            // Empty row past end of document.
+            frame.render_widget(
+                Paragraph::new(Span::styled(
+                    " ".repeat(app.gutter_width as usize),
+                    Style::default().bg(LINE_NUM_BG),
+                )),
+                gutter_area,
+            );
+            let bg_spans: Vec<Span> = (0..text_width)
+                .map(|col| {
+                    let bg = if guide_col == Some(col) { Color::Rgb(60, 62, 74) } else { EDITOR_BG };
+                    Span::styled(" ", Style::default().bg(bg))
+                })
+                .collect();
+            frame.render_widget(Paragraph::new(Line::from(bg_spans)), text_area);
+            continue;
+        }
+
+        let vr = &app.visual_rows[vr_idx];
+        let line = &app.lines[vr.line_idx];
+
+        // ── Gutter ──
+        if vr.is_continuation {
+            // Show wrap indicator instead of line number.
+            let pad = app.gutter_width as usize - 2;
+            let indicator = format!("{:>width$}\u{21AA} ", "", width = pad);
+            frame.render_widget(
+                Paragraph::new(Span::styled(
+                    indicator,
+                    Style::default().fg(WRAP_INDICATOR_FG).bg(LINE_NUM_BG),
+                )),
+                gutter_area,
+            );
+        } else {
+            let num_str = format!("{:>width$} ", vr.line_idx + 1, width = digits);
+            frame.render_widget(
+                Paragraph::new(Span::styled(
+                    num_str,
+                    Style::default().fg(LINE_NUM_FG).bg(LINE_NUM_BG),
+                )),
+                gutter_area,
+            );
+        }
+
+        // ── Text ──
+        // Check if this visual row's line continues on the next visual row.
+        let has_next_vr = vr_idx + 1 < app.visual_rows.len()
+            && app.visual_rows[vr_idx + 1].line_idx == vr.line_idx;
+
+        let mut spans = Vec::new();
+        let mut byte_col = vr.byte_start;
+        let mut rendered = 0usize;
+
+        for ch in line[vr.byte_start..].chars() {
+            if rendered >= text_width {
+                break;
+            }
+
+            let is_cursor = vr.line_idx == app.cursor_row && byte_col == app.cursor_col;
+            let is_guide = guide_col == Some(rendered);
+
+            let style = if is_cursor {
+                Style::default().fg(CURSOR_FG).bg(CURSOR_BG)
+            } else if is_guide {
+                Style::default().fg(EDITOR_FG).bg(Color::Rgb(60, 62, 74))
+            } else {
+                Style::default().fg(EDITOR_FG).bg(EDITOR_BG)
+            };
+            spans.push(Span::styled(ch.to_string(), style));
+            rendered += 1;
+            byte_col += ch.len_utf8();
+        }
+
+        // Cursor at end of line (only on the last visual row of the line).
+        if !has_next_vr
+            && vr.line_idx == app.cursor_row
+            && app.cursor_col >= byte_col
+            && app.cursor_col <= line.len()
+            && rendered < text_width
+        {
+            spans.push(Span::styled(
+                " ",
+                Style::default().fg(CURSOR_FG).bg(CURSOR_BG),
+            ));
+            rendered += 1;
+        }
+
+        // Fill remaining columns.
+        while rendered < text_width {
+            let is_guide = guide_col == Some(rendered);
+            let bg = if is_guide { Color::Rgb(60, 62, 74) } else { EDITOR_BG };
+            spans.push(Span::styled(" ", Style::default().bg(bg)));
+            rendered += 1;
+        }
+
+        frame.render_widget(Paragraph::new(Line::from(spans)), text_area);
+    }
+}
+
 fn render_status_bar(frame: &mut ratatui::Frame, app: &EditorApp, area: Rect) {
     let modified_indicator = if app.modified { "*" } else { "" };
 
@@ -1126,9 +1365,12 @@ fn render_status_bar(frame: &mut ratatui::Frame, app: &EditorApp, area: Rect) {
         EditorMode::PlainText => "Plain",
     };
 
+    let wrap_indicator = if app.word_wrap { " Wrap" } else { "" };
+
     let left = format!(
-        " [{}] {}:{} {}",
+        " [{}{}] {}:{} {}",
         mode_name,
+        wrap_indicator,
         app.cursor_row + 1,
         app.cursor_col + 1,
         modified_indicator,
@@ -1209,7 +1451,7 @@ fn render_dropdown(frame: &mut ratatui::Frame, app: &EditorApp, menu_index: usiz
 fn render_help_overlay(frame: &mut ratatui::Frame) {
     let screen = frame.area();
     let width = 50u16.min(screen.width.saturating_sub(4));
-    let height = 24u16.min(screen.height.saturating_sub(4));
+    let height = 25u16.min(screen.height.saturating_sub(4));
     let x = (screen.width.saturating_sub(width)) / 2;
     let y = (screen.height.saturating_sub(height)) / 2;
     let rect = Rect::new(x, y, width, height);
@@ -1243,6 +1485,7 @@ fn render_help_overlay(frame: &mut ratatui::Frame) {
         shortcut("  Ctrl+P        Prev paragraph"),
         shortcut("  Ctrl+D        Delete paragraph"),
         shortcut("  Ctrl+E        Empty (delete all)"),
+        shortcut("  Alt+Z         Toggle word wrap"),
         Line::raw(""),
         Line::styled(
             "  Press any key to close",
