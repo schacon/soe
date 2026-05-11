@@ -102,6 +102,8 @@ enum MenuAction {
     Save,
     SaveAndQuit,
     Cancel,
+    Undo,
+    Redo,
     GotoEnd,
     NextLine,
     PrevLine,
@@ -142,7 +144,17 @@ static FILE_MENU: [MenuItem; 3] = [
     },
 ];
 
-static EDIT_MENU: [MenuItem; 7] = [
+static EDIT_MENU: [MenuItem; 9] = [
+    MenuItem {
+        label: "Undo",
+        shortcut: "Ctrl+Z",
+        action: MenuAction::Undo,
+    },
+    MenuItem {
+        label: "Redo",
+        shortcut: "Ctrl+Y",
+        action: MenuAction::Redo,
+    },
     MenuItem {
         label: "Go to End of Line",
         shortcut: "Ctrl+A",
@@ -210,6 +222,18 @@ struct TeddyOverlay {
     active: bool,
 }
 
+// ── Undo / Redo ────────────────────────────────────────────────────────────
+
+/// A snapshot of the editor buffer at a point in time.
+#[derive(Clone)]
+struct Snapshot {
+    lines: Vec<String>,
+    cursor_row: usize,
+    cursor_col: usize,
+}
+
+const MAX_UNDO: usize = 200;
+
 // ── Editor state ────────────────────────────────────────────────────────────
 
 struct EditorApp {
@@ -232,6 +256,8 @@ struct EditorApp {
     gutter_width: u16,
     highlight_save_hint: bool,
     hint_highlight_frames: u8,
+    undo_stack: Vec<Snapshot>,
+    redo_stack: Vec<Snapshot>,
 }
 
 impl EditorApp {
@@ -266,6 +292,8 @@ impl EditorApp {
             gutter_width: 4,
             highlight_save_hint: false,
             hint_highlight_frames: 0,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
         }
     }
 
@@ -304,13 +332,56 @@ impl EditorApp {
         }
     }
 
+    /// Save current state to the undo stack before a mutation.
+    fn save_undo(&mut self) {
+        self.undo_stack.push(Snapshot {
+            lines: self.lines.clone(),
+            cursor_row: self.cursor_row,
+            cursor_col: self.cursor_col,
+        });
+        if self.undo_stack.len() > MAX_UNDO {
+            self.undo_stack.remove(0);
+        }
+        self.redo_stack.clear();
+    }
+
+    fn undo(&mut self) {
+        if let Some(snapshot) = self.undo_stack.pop() {
+            self.redo_stack.push(Snapshot {
+                lines: self.lines.clone(),
+                cursor_row: self.cursor_row,
+                cursor_col: self.cursor_col,
+            });
+            self.lines = snapshot.lines;
+            self.cursor_row = snapshot.cursor_row;
+            self.cursor_col = snapshot.cursor_col;
+            self.modified = true;
+        }
+    }
+
+    fn redo(&mut self) {
+        if let Some(snapshot) = self.redo_stack.pop() {
+            self.undo_stack.push(Snapshot {
+                lines: self.lines.clone(),
+                cursor_row: self.cursor_row,
+                cursor_col: self.cursor_col,
+            });
+            self.lines = snapshot.lines;
+            self.cursor_row = snapshot.cursor_row;
+            self.cursor_col = snapshot.cursor_col;
+            self.modified = true;
+        }
+    }
+
     fn insert_char(&mut self, ch: char) {
+        self.save_undo();
         self.lines[self.cursor_row].insert(self.cursor_col, ch);
         self.cursor_col += ch.len_utf8();
         self.modified = true;
     }
 
     fn insert_newline(&mut self) {
+        self.save_undo();
         let rest = self.lines[self.cursor_row][self.cursor_col..].to_string();
         self.lines[self.cursor_row].truncate(self.cursor_col);
         self.cursor_row += 1;
@@ -321,6 +392,7 @@ impl EditorApp {
 
     fn backspace(&mut self) {
         if self.cursor_col > 0 {
+            self.save_undo();
             let prev = self.lines[self.cursor_row][..self.cursor_col]
                 .char_indices()
                 .next_back()
@@ -330,6 +402,7 @@ impl EditorApp {
             self.cursor_col = prev;
             self.modified = true;
         } else if self.cursor_row > 0 {
+            self.save_undo();
             let line = self.lines.remove(self.cursor_row);
             self.cursor_row -= 1;
             self.cursor_col = self.lines[self.cursor_row].len();
@@ -341,9 +414,11 @@ impl EditorApp {
     fn delete(&mut self) {
         let line_len = self.lines[self.cursor_row].len();
         if self.cursor_col < line_len {
+            self.save_undo();
             self.lines[self.cursor_row].remove(self.cursor_col);
             self.modified = true;
         } else if self.cursor_row + 1 < self.lines.len() {
+            self.save_undo();
             let next_line = self.lines.remove(self.cursor_row + 1);
             self.lines[self.cursor_row].push_str(&next_line);
             self.modified = true;
@@ -363,6 +438,12 @@ impl EditorApp {
             MenuAction::Cancel => {
                 self.save_on_quit = false;
                 self.should_quit = true;
+            }
+            MenuAction::Undo => {
+                self.undo();
+            }
+            MenuAction::Redo => {
+                self.redo();
             }
             MenuAction::GotoEnd => {
                 self.cursor_col = self.lines[self.cursor_row].len();
@@ -389,6 +470,7 @@ impl EditorApp {
                 self.delete_paragraph();
             }
             MenuAction::EmptyAll => {
+                self.save_undo();
                 self.lines = vec![String::new()];
                 self.cursor_row = 0;
                 self.cursor_col = 0;
@@ -474,6 +556,12 @@ impl EditorApp {
                     }
                     KeyCode::Char('e') if ctrl => {
                         self.execute_menu_action(MenuAction::EmptyAll);
+                    }
+                    KeyCode::Char('z') if ctrl => {
+                        self.undo();
+                    }
+                    KeyCode::Char('y') if ctrl => {
+                        self.redo();
                     }
                     KeyCode::Up => {
                         if self.cursor_row > 0 {
@@ -565,6 +653,7 @@ impl EditorApp {
                     }
                     KeyCode::Delete => self.delete(),
                     KeyCode::Tab => {
+                        self.save_undo();
                         self.lines[self.cursor_row].insert_str(self.cursor_col, "    ");
                         self.cursor_col += 4;
                         self.modified = true;
@@ -665,6 +754,7 @@ impl EditorApp {
     /// Delete all lines in the current paragraph (contiguous non-empty
     /// lines around the cursor). Leaves the cursor on the next content.
     fn delete_paragraph(&mut self) {
+        self.save_undo();
         // Find the start of this paragraph.
         let mut start = self.cursor_row;
         while start > 0 && !self.lines[start - 1].trim().is_empty() {
@@ -1119,7 +1209,7 @@ fn render_dropdown(frame: &mut ratatui::Frame, app: &EditorApp, menu_index: usiz
 fn render_help_overlay(frame: &mut ratatui::Frame) {
     let screen = frame.area();
     let width = 50u16.min(screen.width.saturating_sub(4));
-    let height = 22u16.min(screen.height.saturating_sub(4));
+    let height = 24u16.min(screen.height.saturating_sub(4));
     let x = (screen.width.saturating_sub(width)) / 2;
     let y = (screen.height.saturating_sub(height)) / 2;
     let rect = Rect::new(x, y, width, height);
@@ -1144,6 +1234,8 @@ fn render_help_overlay(frame: &mut ratatui::Frame) {
         shortcut("  F10           Open Menu"),
         Line::raw(""),
         heading("  Edit"),
+        shortcut("  Ctrl+Z        Undo"),
+        shortcut("  Ctrl+Y        Redo"),
         shortcut("  Ctrl+A        Go to end of line"),
         shortcut("  Ctrl+J        Next line"),
         shortcut("  Ctrl+K        Prev line"),
