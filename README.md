@@ -13,7 +13,6 @@ Built on [ratatui](https://ratatui.rs) and [crossterm](https://github.com/crosst
 - Mouse support (click to position cursor, scroll)
 - Two modes: `PlainText` and `CommitMessage` (72-char guide line + soft wrap)
 - Tab expansion (4 spaces)
-- RAII terminal guard — restores terminal state even on panic
 - Save (`Ctrl+S`) returns content, cancel (`Esc`) returns `None`
 
 ## Usage
@@ -26,9 +25,16 @@ let result = soe::capture("Enter your message")?;
 // With pre-filled content
 let result = soe::capture_with_initial("Edit the description", "existing text")?;
 
+// Raw editing — same editor resolution, but no comment prompt and nothing
+// stripped from the result (safe for markdown, where # is a heading)
+let result = soe::edit("README.md", "initial content", soe::EditorMode::PlainText)?;
+
 // Direct access to the built-in TUI editor (skips external editor resolution)
-let result = soe::edit("filename", "initial content", soe::EditorMode::PlainText)?;
+let result = soe::edit_builtin("filename", "initial content", soe::EditorMode::PlainText)?;
 ```
+
+With an external editor, `soe::edit` cancels on a non-zero exit status (vim's
+`:cq`); in the built-in editor, `Esc` cancels. Both return `None`.
 
 ## License
 

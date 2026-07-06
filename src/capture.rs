@@ -34,6 +34,37 @@ pub fn capture_with_initial(prompt: &str, initial: &str) -> Result<Option<String
     }
 }
 
+/// Edit `initial` in an external editor, raw: no comment prompt, no stripping.
+///
+/// The buffer is a tempfile named after `filename` so the editor picks up
+/// syntax highlighting. Returns `Some(content)` when the editor exits 0,
+/// `None` when it exits non-zero (e.g. vim's `:cq`) — except exit codes that
+/// mean the editor itself couldn't run, which are errors.
+pub(crate) fn edit_external(editor: &str, filename: &str, initial: &str) -> Result<Option<String>> {
+    let dir = tempfile::tempdir().context("creating editor tempdir")?;
+    let name = Path::new(filename)
+        .file_name()
+        .filter(|n| !n.is_empty())
+        .map(|n| n.to_os_string())
+        .unwrap_or_else(|| "soe.txt".into());
+    let path = dir.path().join(name);
+    std::fs::write(&path, initial).context("writing initial content to tempfile")?;
+
+    let status = spawn_editor(editor, &path)
+        .with_context(|| format!("spawning editor `{editor}`"))?;
+    if !status.success() {
+        // 127/126: `sh` couldn't find/execute the editor (9009 is cmd.exe's
+        // equivalent) — a misconfiguration, not a cancel.
+        if matches!(status.code(), Some(126) | Some(127) | Some(9009)) {
+            anyhow::bail!("editor `{editor}` could not be run (exit status {status})");
+        }
+        return Ok(None);
+    }
+
+    let contents = std::fs::read_to_string(&path).context("reading editor tempfile")?;
+    Ok(Some(contents))
+}
+
 /// Spawn an external editor via a tempfile.
 fn capture_external(editor: &str, prompt: &str, initial: &str) -> Result<Option<String>> {
     let mut tf = tempfile::Builder::new()
@@ -83,7 +114,7 @@ fn capture_builtin(prompt: &str, initial: &str) -> Result<Option<String>> {
         )
     };
 
-    let result = crate::edit("soe", &content, EditorMode::PlainText)?;
+    let result = crate::edit_builtin("soe", &content, EditorMode::PlainText)?;
 
     Ok(result.and_then(|text| strip_comments(&text)))
 }
@@ -128,7 +159,7 @@ fn spawn_editor(editor: &str, path: &Path) -> Result<std::process::ExitStatus> {
 ///   4. `$EDITOR`
 ///
 /// Returns `None` when no external editor is configured (→ use built-in).
-fn resolve_editor() -> Option<String> {
+pub(crate) fn resolve_editor() -> Option<String> {
     fn non_empty_var(name: &str) -> Option<String> {
         std::env::var(name).ok().filter(|v| !v.is_empty())
     }

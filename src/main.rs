@@ -5,8 +5,9 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
     let result = if args.is_empty() {
-        // No args: open empty scratch buffer
-        soe::edit("untitled", "", soe::EditorMode::PlainText).map(|content| {
+        // No args: open empty scratch buffer (soe *is* the editor — never
+        // defer to $EDITOR here)
+        soe::edit_builtin("untitled", "", soe::EditorMode::PlainText).map(|content| {
             if let Some(text) = content {
                 print!("{text}");
             }
