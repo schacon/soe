@@ -1385,7 +1385,7 @@ fn render_status_bar(frame: &mut ratatui::Frame, app: &EditorApp, area: Rect) {
         Style::default().fg(STATUS_BAR_FG).bg(STATUS_BAR_BG)
     };
 
-    let ctrl_q_hint = "Ctrl-Q to save ";
+    let ctrl_q_hint = "Ctrl-Q to save and exit ";
 
     let padding = area
         .width
